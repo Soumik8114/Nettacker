@@ -10,6 +10,10 @@ from types import SimpleNamespace
 
 from flask import Flask, Response, abort, jsonify, make_response, render_template
 from flask import request as flask_request
+try:
+    from flask_sock import Sock
+except Exception:  # pragma: no cover
+    Sock = None
 from werkzeug.serving import WSGIRequestHandler
 from werkzeug.utils import secure_filename
 
@@ -25,16 +29,25 @@ from nettacker.api.core import (
     scan_methods,
 )
 from nettacker.api.helpers import structure
+from nettacker.api.scan_state import (
+    get_scan_info,
+    get_scan_version,
+    is_stop_requested,
+    notify_scan_changed,
+    register_scan,
+    wait_for_scan_change,
+)
 from nettacker.config import Config
 from nettacker.core.app import Nettacker
 from nettacker.core.die import die_failure
 from nettacker.core.graph import create_compare_report
 from nettacker.core.messages import messages as _
-from nettacker.core.utils.common import generate_compare_filepath, now
+from nettacker.core.utils.common import generate_compare_filepath, now, generate_random_token
 from nettacker.database.db import (
     create_connection,
     get_logs_by_scan_id,
     get_scan_result,
+    get_scan_progress_stats,
     last_host_logs,
     logs_to_report_html,
     logs_to_report_json,
@@ -50,6 +63,9 @@ log = logger.get_logger()
 
 app = Flask(__name__, template_folder=str(Config.path.web_static_dir))
 app.config.from_object(__name__)
+
+# Optional real-time scan updates over WebSockets.
+sock = Sock(app) if Sock else None
 
 nettacker_path_config = Config.path
 nettacker_application_config = Config.settings.as_dict()
@@ -263,12 +279,21 @@ def new_scan():
         ]
     # Handle service discovery
     form_values["skip_service_discovery"] = form_values.get("skip_service_discovery", "") == "true"
-    nettacker_app = Nettacker(api_arguments=SimpleNamespace(**form_values))
+    scan_id = generate_random_token(32)
+    nettacker_app = Nettacker(api_arguments=SimpleNamespace(**form_values), scan_id=scan_id)
     app.config["OWASP_NETTACKER_CONFIG"]["options"] = nettacker_app.arguments
+
     thread = Thread(target=nettacker_app.run)
+    thread.daemon = False
     thread.start()
 
-    return jsonify(vars(nettacker_app.arguments)), 200
+    # Prepare response with scan metadata
+    response_data = vars(nettacker_app.arguments)
+    response_data["scan_id"] = scan_id
+    response_data["total_targets"] = len(nettacker_app.arguments.targets) if hasattr(nettacker_app.arguments, 'targets') else 0
+    response_data["total_modules"] = len(nettacker_app.arguments.selected_modules) if hasattr(nettacker_app.arguments, 'selected_modules') else 0
+
+    return jsonify(response_data), 200
 
 
 @app.route("/compare/scans", methods=["POST"])
@@ -353,6 +378,178 @@ def session_kill():
     res = make_response(jsonify(structure(status="ok", msg=_("browser_session_killed"))))
     res.set_cookie("key", "", expires=0)
     return res
+
+
+def _build_scan_status_payload(scan_id: str):
+    """Build a scan status payload shared by HTTP and WebSocket endpoints."""
+    # Get scan metadata from scan state tracker
+    scan_info = get_scan_info(scan_id)
+    if not scan_info:
+        return None, (jsonify(structure(status="error", msg="Scan not found")), 404)
+
+    total_targets = scan_info.get("total_targets", 0)
+    total_modules = scan_info.get("total_modules", 0)
+    current_target = scan_info.get("current_target", "")
+    current_module = scan_info.get("current_module", "")
+    scan_status = scan_info.get("status", "running")
+
+    # Get progress stats from database
+    stats = get_scan_progress_stats(
+        scan_id, total_targets, total_modules, current_target, current_module
+    )
+
+    progress_value = stats.get("progress_percent", 0)
+    # Ensure consistency: if a scan is completed, the UI should show 100%.
+    if scan_status == "completed":
+        progress_value = 100
+
+    # Normalize recent events into {timestamp, message} for the WebUI
+    recent_events = []
+    for event in stats.get("recent_events", []) or []:
+        try:
+            timestamp = event.get("date") or ""
+            target = event.get("target") or ""
+            module_name = event.get("module_name") or ""
+            message = f"{target} :: {module_name}"
+            recent_events.append({"timestamp": timestamp, "message": message})
+        except Exception:
+            continue
+
+    return (
+        {
+            "status": scan_status,
+            "progress": progress_value,
+            "current_target": current_target,
+            "current_module": current_module,
+            "hosts_scanned": stats.get("targets_scanned", 0),
+            "modules_run": stats.get("modules_executed", 0),
+            "issues_found": stats.get("issues_found", 0),
+            "completed_events": stats.get("completed_events", 0),
+            "total_targets": total_targets,
+            "total_modules": total_modules,
+            "recent_events": recent_events,
+        },
+        None,
+    )
+
+
+if sock:
+
+    @sock.route("/ws/scan")
+    def ws_scan_status(ws):
+        """WebSocket stream of scan progress.
+
+        Query params:
+          - scan_id: required
+        Auth:
+          - same as HTTP endpoints via cookie or key param
+        """
+        api_key_is_valid(app, flask_request)
+        scan_id = get_value(flask_request, "scan_id")
+        if not scan_id:
+            try:
+                ws.send(json.dumps({"status": "error", "msg": "scan_id parameter required"}))
+            except Exception:
+                pass
+            return
+
+        payload, err = _build_scan_status_payload(scan_id)
+        if err:
+            try:
+                ws.send(json.dumps({"status": "error", "msg": "Scan not found"}))
+            except Exception:
+                pass
+            return
+
+        version = get_scan_version(scan_id)
+        try:
+            ws.send(json.dumps(payload))
+        except Exception:
+            return
+
+        # Push updates whenever scan_state changes.
+        while True:
+            new_version = wait_for_scan_change(scan_id, version, timeout=30.0)
+            if new_version == version:
+                continue
+            version = new_version
+
+            payload, err = _build_scan_status_payload(scan_id)
+            if err:
+                break
+
+            try:
+                ws.send(json.dumps(payload))
+            except Exception:
+                break
+
+            if payload.get("status") in ("completed", "failed", "stopped"):
+                break
+
+
+@app.route("/scan/status", methods=["GET"])
+def get_scan_status():
+    """
+    Get the progress and status of a running scan
+
+    Returns:
+        JSON with progress information and recent log entries
+    """
+    api_key_is_valid(app, flask_request)
+    scan_id = get_value(flask_request, "scan_id")
+    
+    if not scan_id:
+        return jsonify(structure(status="error", msg="scan_id parameter required")), 400
+
+    payload, err = _build_scan_status_payload(scan_id)
+    if err:
+        return err
+    return jsonify(payload), 200
+
+
+def request_scan_stop(scan_id):
+    """
+    Internal function to request a scan stop
+
+    Args:
+        scan_id: The unique scan ID
+    
+    Returns:
+        True if stop was requested, False otherwise
+    """
+    # Get scan info from state tracker
+    scan_info = get_scan_info(scan_id)
+    if not scan_info:
+        return False
+    
+    # Mark stop as requested - the scan thread should check this flag periodically
+    from nettacker.api.scan_state import running_scans
+    if scan_id in running_scans:
+        running_scans[scan_id]["stop_requested"] = True
+        notify_scan_changed(scan_id)
+        return True
+    return False
+
+
+@app.route("/scan/stop", methods=["POST"])
+def stop_scan():
+    """
+    Request to stop a running scan
+
+    Returns:
+        JSON with stop status
+    """
+    api_key_is_valid(app, flask_request)
+    scan_id = get_value(flask_request, "scan_id")
+    
+    if not scan_id:
+        return jsonify(structure(status="error", msg="scan_id parameter required")), 400
+    
+    # Use internal function
+    if request_scan_stop(scan_id):
+        return jsonify(structure(status="ok", msg="Stop signal sent to scan")), 200
+    else:
+        return jsonify(structure(status="error", msg="Scan not found or already completed")), 404
 
 
 @app.route("/results/get_list", methods=["GET"])

@@ -438,6 +438,45 @@ $(document).ready(function () {
         setTimeout('$("#success_request").addClass("animated fadeOut");', 5000);
         setTimeout('$("#success_request").addClass("hidden");', 6000);
         $("#success_request").removeClass("animated fadeOut");
+
+        // Start live progress monitoring if scan_id is provided
+        if (res && res.scan_id) {
+          var scanId = res.scan_id;
+          var startTime = new Date();
+
+          // Reset UI
+          $("#scan_id_display").text(scanId);
+          $("#start_time").text(startTime.toLocaleString());
+          $("#targets_count").text(res.total_targets || 0);
+          $("#progress_percentage").text(0);
+          $("#progress_bar")
+            .css("width", "0%")
+            .attr("aria-valuenow", 0)
+            .text("0%");
+          $("#current_target").text("Waiting to start...");
+          $("#current_module").text("Initializing...");
+          $("#elapsed_time").text("00:00:00");
+          $("#remaining_time").text("Calculating...");
+          $("#issues_found").text("0");
+          $("#hosts_scanned").text("0");
+          $("#modules_run").text("0");
+          $("#open_ports").text("0");
+          $("#services_found").text("0");
+          $("#scan_status")
+            .removeClass("label-success label-danger label-warning")
+            .addClass("label-info")
+            .text("RUNNING");
+          $("#stop_scan_btn").prop("disabled", false);
+          $("#live_log").html('<span class="text-muted">[Scan starting...]</span>');
+          window.seenEventKeys = {};
+
+          // Switch view
+          $("#home").addClass("hidden");
+          $("#scan_progress").removeClass("hidden");
+
+          // Start polling
+          startLiveScanMonitoring(scanId, startTime);
+        }
       })
       .fail(function (jqXHR, textStatus, errorThrown) {
         document.getElementById("error_msg").innerHTML = jqXHR.responseText;
@@ -1097,67 +1136,225 @@ function filter_large_content(content, filter_rate){
   });
 
   // Real-time scan progress monitoring
-  function updateScanProgress(scanId, startTime, intervalId) {
+  function applyScanProgressUpdate(res, startTime) {
+    if (!res) return;
+
+    // Update progress bar
+    var progress = parseInt(res.progress, 10);
+    if (isNaN(progress)) progress = 0;
+    $("#progress_percentage").text(progress);
+    $("#progress_bar")
+      .css("width", progress + "%")
+      .attr("aria-valuenow", progress)
+      .text(progress + "%");
+
+    // Update current scanning info
+    if (res.current_target) {
+      $("#current_target").text(res.current_target);
+    }
+    if (res.current_module) {
+      $("#current_module").text(res.current_module);
+    }
+
+    // Update statistics
+    $("#hosts_scanned").text(res.hosts_scanned || 0);
+    $("#modules_run").text(res.modules_run || 0);
+    $("#open_ports").text(res.open_ports || 0);
+    $("#services_found").text(res.services_found || 0);
+    $("#issues_found").text(res.issues_found || 0);
+
+    // Calculate and update elapsed time
+    var now = new Date();
+    var elapsed = Math.floor((now - startTime) / 1000);
+    var hours = Math.floor(elapsed / 3600);
+    var minutes = Math.floor((elapsed % 3600) / 60);
+    var seconds = elapsed % 60;
+    var timeStr =
+      String(hours).padStart(2, "0") +
+      ":" +
+      String(minutes).padStart(2, "0") +
+      ":" +
+      String(seconds).padStart(2, "0");
+    $("#elapsed_time").text(timeStr);
+
+    // Update estimated remaining time
+    if (progress > 0 && progress < 100) {
+      var remaining = Math.floor((elapsed * (100 - progress)) / progress);
+      var rh = Math.floor(remaining / 3600);
+      var rm = Math.floor((remaining % 3600) / 60);
+      var rs = remaining % 60;
+      var remainingStr =
+        String(rh).padStart(2, "0") +
+        ":" +
+        String(rm).padStart(2, "0") +
+        ":" +
+        String(rs).padStart(2, "0");
+      $("#remaining_time").text(remainingStr);
+    } else if (progress >= 100) {
+      $("#remaining_time").text("00:00:00");
+    }
+
+    // Update scan status
+    if (res.status === "completed") {
+      // If the backend reports completion but the computed percent is low,
+      // force the UI to 100% to avoid a "stuck" progress bar.
+      if (progress < 100) {
+        progress = 100;
+        $("#progress_percentage").text(progress);
+        $("#progress_bar")
+          .css("width", progress + "%")
+          .attr("aria-valuenow", progress)
+          .text(progress + "%");
+        $("#remaining_time").text("00:00:00");
+      }
+      $("#scan_status")
+        .removeClass("label-info")
+        .addClass("label-success")
+        .text("COMPLETED");
+      $("#stop_scan_btn").prop("disabled", true);
+      addLogEntry("Scan completed successfully!", "success");
+      // Close any active WebSocket
+      if (window.currentScanWebSocket) {
+        try {
+          window.currentScanWebSocket.close();
+        } catch (e) {}
+        window.currentScanWebSocket = null;
+      }
+      // Stop polling if it was running
+      if (window.currentScanInterval) {
+        clearInterval(window.currentScanInterval);
+        window.currentScanInterval = null;
+      }
+    } else if (res.status === "failed") {
+      $("#scan_status")
+        .removeClass("label-info")
+        .addClass("label-danger")
+        .text("FAILED");
+      $("#stop_scan_btn").prop("disabled", true);
+      if (window.currentScanWebSocket) {
+        try {
+          window.currentScanWebSocket.close();
+        } catch (e) {}
+        window.currentScanWebSocket = null;
+      }
+      if (window.currentScanInterval) {
+        clearInterval(window.currentScanInterval);
+        window.currentScanInterval = null;
+      }
+      addLogEntry("Scan failed!", "error");
+    } else if (res.status === "stopped") {
+      $("#scan_status")
+        .removeClass("label-info")
+        .addClass("label-warning")
+        .text("STOPPED");
+      $("#stop_scan_btn").prop("disabled", true);
+      if (window.currentScanWebSocket) {
+        try {
+          window.currentScanWebSocket.close();
+        } catch (e) {}
+        window.currentScanWebSocket = null;
+      }
+      if (window.currentScanInterval) {
+        clearInterval(window.currentScanInterval);
+        window.currentScanInterval = null;
+      }
+    }
+
+    // Add new log entries
+    if (res.recent_events && res.recent_events.length > 0) {
+      res.recent_events.forEach(function (event) {
+        var key = (event.timestamp || "") + "|" + (event.message || "");
+        if (!window.seenEventKeys) window.seenEventKeys = {};
+        if (!window.seenEventKeys[key]) {
+          addLogEntry(event.message || key, "info");
+          window.seenEventKeys[key] = true;
+        }
+      });
+    }
+  }
+
+  function startLiveScanMonitoring(scanId, startTime) {
+    // Clean up previous monitoring
+    if (window.currentScanInterval) {
+      clearInterval(window.currentScanInterval);
+      window.currentScanInterval = null;
+    }
+    if (window.currentScanWebSocket) {
+      try {
+        window.currentScanWebSocket.close();
+      } catch (e) {}
+      window.currentScanWebSocket = null;
+    }
+
+    function startPollingFallback() {
+      updateScanProgress(scanId, startTime);
+      window.currentScanInterval = setInterval(function () {
+        updateScanProgress(scanId, startTime);
+      }, 2000);
+    }
+
+    // Prefer WebSocket (push updates) if supported.
+    if (window.WebSocket) {
+      try {
+        var protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        var wsUrl =
+          protocol +
+          "://" +
+          window.location.host +
+          "/ws/scan?scan_id=" +
+          encodeURIComponent(scanId);
+        var ws = new WebSocket(wsUrl);
+        window.currentScanWebSocket = ws;
+
+        ws.onopen = function () {
+          addLogEntry("Live updates connected.", "info");
+        };
+
+        ws.onmessage = function (evt) {
+          try {
+            var payload = JSON.parse(evt.data);
+            applyScanProgressUpdate(payload, startTime);
+          } catch (e) {
+            // Ignore malformed events
+          }
+        };
+
+        ws.onerror = function () {
+          // If WS fails, fall back to polling
+          if (window.currentScanWebSocket === ws) {
+            window.currentScanWebSocket = null;
+          }
+          startPollingFallback();
+        };
+
+        ws.onclose = function () {
+          // If WS closes before scan ends, fall back to polling
+          if (window.currentScanWebSocket === ws) {
+            window.currentScanWebSocket = null;
+          }
+          // If scan is still running, continue via polling
+          if ($("#scan_status").text() === "RUNNING") {
+            startPollingFallback();
+          }
+        };
+
+        return;
+      } catch (e) {
+        // fall through to polling
+      }
+    }
+
+    startPollingFallback();
+  }
+
+  function updateScanProgress(scanId, startTime) {
     $.ajax({
       type: "GET",
       url: "/scan/status?scan_id=" + scanId,
       dataType: "json",
     })
       .done(function (res) {
-        if (!res) return;
-        
-        // Update progress bar
-        var progress = res.progress || 0;
-        $("#progress_percentage").text(progress);
-        $("#progress_bar").css("width", progress + "%").text(progress + "%");
-        
-        // Update current scanning info
-        if (res.current_target) {
-          $("#current_target").text(res.current_target);
-        }
-        if (res.current_module) {
-          $("#current_module").text(res.current_module);
-        }
-        
-        // Update statistics
-        $("#hosts_scanned").text(res.hosts_scanned || 0);
-        $("#modules_run").text(res.modules_run || 0);
-        $("#open_ports").text(res.open_ports || 0);
-        $("#services_found").text(res.services_found || 0);
-        $("#issues_found").text(res.vulnerabilities || 0);
-        
-        // Calculate and update elapsed time
-        var now = new Date();
-        var elapsed = Math.floor((now - startTime) / 1000);
-        var hours = Math.floor(elapsed / 3600);
-        var minutes = Math.floor((elapsed % 3600) / 60);
-        var seconds = elapsed % 60;
-        var timeStr = String(hours).padStart(2, '0') + ':' + 
-                     String(minutes).padStart(2, '0') + ':' + 
-                     String(seconds).padStart(2, '0');
-        $("#elapsed_time").text(timeStr);
-        
-        // Update scan status
-        if (res.status === "completed") {
-          $("#scan_status").removeClass("label-info").addClass("label-success").text("COMPLETED");
-          clearInterval(intervalId);
-          $("#stop_scan_btn").prop("disabled", true);
-          addLogEntry("Scan completed successfully!", "success");
-        } else if (res.status === "failed") {
-          $("#scan_status").removeClass("label-info").addClass("label-danger").text("FAILED");
-          clearInterval(intervalId);
-          addLogEntry("Scan failed!", "error");
-        }
-        
-        // Add new log entries
-        if (res.recent_events && res.recent_events.length > 0) {
-          res.recent_events.forEach(function(event) {
-            if (!window.lastLogEntry || event.timestamp > window.lastLogEntry) {
-              addLogEntry(event.message || event, "info");
-              window.lastLogEntry = event.timestamp;
-            }
-          });
-        }
+        applyScanProgressUpdate(res, startTime);
       })
       .fail(function () {
         // Scan may not have status endpoint, silently continue

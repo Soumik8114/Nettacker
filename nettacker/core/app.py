@@ -33,15 +33,22 @@ from nettacker.database.mysql import mysql_create_database, mysql_create_tables
 from nettacker.database.postgresql import postgres_create_database
 from nettacker.database.sqlite import sqlite_create_tables
 from nettacker.logger import TerminalCodes
+from nettacker.api.scan_state import (
+    register_scan,
+    set_scan_status,
+    update_scan_progress,
+    is_stop_requested,
+)
 
 log = logger.get_logger()
 
 
 class Nettacker(ArgParser):
-    def __init__(self, api_arguments=None):
+    def __init__(self, api_arguments=None, scan_id=None):
         if not api_arguments:
             self.print_logo()
         self.check_dependencies()
+        self.scan_id = scan_id
 
         log.info(_("scan_started"))
         super().__init__(api_arguments=api_arguments)
@@ -204,7 +211,9 @@ class Nettacker(ArgParser):
         Returns:
             True when it ends
         """
-        scan_id = common_utils.generate_random_token(32)
+        if not self.scan_id:
+            self.scan_id = common_utils.generate_random_token(32)
+        scan_id = self.scan_id
         log.info("ScanID: {0}".format(scan_id))
         log.info(_("regrouping_targets"))
         # find total number of targets + types + expand (subdomain, IPRanges, etc)
@@ -213,12 +222,25 @@ class Nettacker(ArgParser):
         if not self.arguments.targets:
             log.info(_("no_live_service_found"))
             return True
+        
+        # Register scan in the state tracker for API progress monitoring
+        total_targets = len(self.arguments.targets)
+        total_modules = len(self.arguments.selected_modules)
+        register_scan(scan_id, total_targets, total_modules)
+        
         exit_code = self.start_scan(scan_id)
         create_report(self.arguments, scan_id)
         if self.arguments.scan_compare_id is not None:
             create_compare_report(self.arguments, scan_id)
-        log.info("ScanID: {0} ".format(scan_id) + _("done"))
 
+        if is_stop_requested(scan_id):
+            set_scan_status(scan_id, "stopped")
+        elif exit_code:
+            set_scan_status(scan_id, "completed")
+        else:
+            set_scan_status(scan_id, "failed")
+
+        log.info("ScanID: {0} ".format(scan_id) + _("done"))
         return exit_code
 
     def start_scan(self, scan_id):
@@ -295,6 +317,14 @@ class Nettacker(ArgParser):
 
         for target in targets:
             for module_name in self.arguments.selected_modules:
+                # Update progress tracking
+                update_scan_progress(scan_id, current_target=target, current_module=module_name)
+                
+                # Check if stop was requested
+                if is_stop_requested(scan_id):
+                    log.info("Stop requested for scan {0}".format(scan_id))
+                    return False
+                
                 thread = Thread(
                     target=self.scan_target,
                     args=(

@@ -1171,3 +1171,144 @@ def search_logs(page, query):
         if len(selected) == 0:
             return structure(status="finished", msg=messages("search_results_end"))
         return selected
+
+def get_scan_progress_stats(scan_id, total_targets=0, total_modules=0, current_target="", current_module=""):
+    """
+    Get scan progress statistics including completion percentage, recent events, and issue count.
+
+    Args:
+        scan_id: The unique scan ID hash
+        total_targets: Total number of targets to scan (for progress calculation)
+        total_modules: Total number of modules (for progress calculation)
+        current_target: Currently scanning target
+        current_module: Currently executing module
+
+    Returns:
+        a dictionary with progress stats or an empty dict if error
+    """
+    session = create_connection()
+    expected_events = total_targets * total_modules if (total_targets > 0 and total_modules > 0) else 1
+    
+    try:
+        if isinstance(session, tuple):
+            connection, cursor = session
+            
+            # Get total completed events for this scan
+            cursor.execute(
+                "SELECT COUNT(*) FROM scan_events WHERE scan_unique_id = ?",
+                (scan_id,)
+            )
+            completed_events = cursor.fetchone()[0]
+            progress_percent = min(100, int((completed_events / expected_events) * 100)) if expected_events > 0 else 0
+            
+            # Count issues (vuln and brute module events)
+            cursor.execute(
+                """SELECT COUNT(*) FROM scan_events 
+                   WHERE scan_unique_id = ? AND (module_name LIKE 'vuln_%' OR module_name LIKE 'brute_%')""",
+                (scan_id,)
+            )
+            issues_found = cursor.fetchone()[0]
+            
+            # Get unique targets scanned
+            cursor.execute(
+                "SELECT COUNT(DISTINCT target) FROM scan_events WHERE scan_unique_id = ?",
+                (scan_id,)
+            )
+            targets_scanned = cursor.fetchone()[0]
+            
+            # Get unique modules executed
+            cursor.execute(
+                "SELECT COUNT(DISTINCT module_name) FROM scan_events WHERE scan_unique_id = ?",
+                (scan_id,)
+            )
+            modules_executed = cursor.fetchone()[0]
+            
+            # Get recent 20 events for live log
+            cursor.execute(
+                """SELECT target, module_name, date, port, event FROM scan_events 
+                   WHERE scan_unique_id = ? 
+                   ORDER BY id DESC 
+                   LIMIT 20""",
+                (scan_id,)
+            )
+            recent_events = []
+            for row in reversed(cursor.fetchall()):
+                try:
+                    recent_events.append({
+                        "target": row[0],
+                        "module_name": row[1],
+                        "date": str(row[2]),
+                        "port": json.loads(row[3]) if row[3] else None,
+                        "event": json.loads(row[4]) if row[4] else None,
+                    })
+                except:
+                    pass
+            
+            cursor.close()
+            connection.close()
+            
+            return {
+                "progress_percent": progress_percent,
+                "completed_events": completed_events,
+                "current_target": current_target,
+                "current_module": current_module,
+                "issues_found": issues_found,
+                "targets_scanned": targets_scanned,
+                "modules_executed": modules_executed,
+                "recent_events": recent_events
+            }
+        
+        else:
+            # SQLAlchemy session
+            completed_events = session.query(HostsLog).filter(HostsLog.scan_unique_id == scan_id).count()
+            progress_percent = min(100, int((completed_events / expected_events) * 100)) if expected_events > 0 else 0
+            
+            issues_found = session.query(HostsLog).filter(
+                HostsLog.scan_unique_id == scan_id,
+                (HostsLog.module_name.like('vuln_%')) | (HostsLog.module_name.like('brute_%'))
+            ).count()
+            
+            targets_scanned = len(set([log.target for log in session.query(HostsLog).filter(HostsLog.scan_unique_id == scan_id).all()]))
+            modules_executed = len(set([log.module_name for log in session.query(HostsLog).filter(HostsLog.scan_unique_id == scan_id).all()]))
+            
+            recent_logs = session.query(HostsLog).filter(
+                HostsLog.scan_unique_id == scan_id
+            ).order_by(HostsLog.id.desc()).limit(20).all()
+            
+            recent_events = []
+            for log in reversed(recent_logs):
+                try:
+                    recent_events.append({
+                        "target": log.target,
+                        "module_name": log.module_name,
+                        "date": str(log.date),
+                        "port": json.loads(log.port) if log.port else None,
+                        "event": json.loads(log.event) if log.event else None,
+                    })
+                except:
+                    pass
+            
+            return {
+                "progress_percent": progress_percent,
+                "completed_events": completed_events,
+                "current_target": current_target,
+                "current_module": current_module,
+                "issues_found": issues_found,
+                "targets_scanned": targets_scanned,
+                "modules_executed": modules_executed,
+                "recent_events": recent_events
+            }
+    
+    except Exception as e:
+        logger.error(f"Error getting scan progress stats: {e}")
+        return {
+            "error": str(e),
+            "progress_percent": 0,
+            "completed_events": 0,
+            "current_target": "",
+            "current_module": "",
+            "issues_found": 0,
+            "targets_scanned": 0,
+            "modules_executed": 0,
+            "recent_events": []
+        }
