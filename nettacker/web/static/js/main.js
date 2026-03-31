@@ -45,15 +45,21 @@ $(document).ready(function () {
       .done(function (res) {
         $("#set_session").hide();
         $("#success_key").removeClass("hidden");
-        setTimeout('$("#success_key").addClass("animated fadeOut");', 5000);
-        setTimeout('$("#success_key").addClass("hidden");', 5000);
+        setTimeout(function() { 
+          $("#success_key").addClass("animated fadeOut"); 
+        }, 5000);
+        setTimeout(function() { 
+          $("#success_key").addClass("hidden"); 
+        }, 5000);
         $("#logout_btn").removeClass("hidden");
         $("#logout_btn").show();
       })
       .fail(function (jqXHR, textStatus, errorThrown) {
         $("#set_session").hide();
         $("#failed_key").removeClass("hidden");
-        setTimeout('$("#failed_key").addClass("hidden");', 5000);
+        setTimeout(function() { 
+          $("#failed_key").addClass("hidden"); 
+        }, 5000);
         $("#set_session").show();
       });
   });
@@ -72,11 +78,13 @@ $(document).ready(function () {
         $("#set_session").removeClass("hidden");
         $("#set_session").show();
         $("#logout_success").removeClass("hidden");
-        setTimeout('$("#logout_success").addClass("animated fadeOut");', 1000);
-        setTimeout('$("#logout_success").addClass("hidden");', 1500);
+        setTimeout(function() { $("#logout_success").addClass("animated fadeOut"); }, 1000);
+        setTimeout(function() { $("#logout_success").addClass("hidden"); }, 1500);
+        // Redirect to home
+        setTimeout(function() { $("#home_btn").click(); }, 2000);
       })
       .fail(function (jqXHR, textStatus, errorThrown) {
-        // codes
+        alert("Error during logout. Please refresh the page.");
       });
   });
 
@@ -1087,4 +1095,114 @@ function filter_large_content(content, filter_rate){
       _query_search();
     }
   });
+
+  // Real-time scan progress monitoring
+  function updateScanProgress(scanId, startTime, intervalId) {
+    $.ajax({
+      type: "GET",
+      url: "/scan/status?scan_id=" + scanId,
+      dataType: "json",
+    })
+      .done(function (res) {
+        if (!res) return;
+        
+        // Update progress bar
+        var progress = res.progress || 0;
+        $("#progress_percentage").text(progress);
+        $("#progress_bar").css("width", progress + "%").text(progress + "%");
+        
+        // Update current scanning info
+        if (res.current_target) {
+          $("#current_target").text(res.current_target);
+        }
+        if (res.current_module) {
+          $("#current_module").text(res.current_module);
+        }
+        
+        // Update statistics
+        $("#hosts_scanned").text(res.hosts_scanned || 0);
+        $("#modules_run").text(res.modules_run || 0);
+        $("#open_ports").text(res.open_ports || 0);
+        $("#services_found").text(res.services_found || 0);
+        $("#issues_found").text(res.vulnerabilities || 0);
+        
+        // Calculate and update elapsed time
+        var now = new Date();
+        var elapsed = Math.floor((now - startTime) / 1000);
+        var hours = Math.floor(elapsed / 3600);
+        var minutes = Math.floor((elapsed % 3600) / 60);
+        var seconds = elapsed % 60;
+        var timeStr = String(hours).padStart(2, '0') + ':' + 
+                     String(minutes).padStart(2, '0') + ':' + 
+                     String(seconds).padStart(2, '0');
+        $("#elapsed_time").text(timeStr);
+        
+        // Update scan status
+        if (res.status === "completed") {
+          $("#scan_status").removeClass("label-info").addClass("label-success").text("COMPLETED");
+          clearInterval(intervalId);
+          $("#stop_scan_btn").prop("disabled", true);
+          addLogEntry("Scan completed successfully!", "success");
+        } else if (res.status === "failed") {
+          $("#scan_status").removeClass("label-info").addClass("label-danger").text("FAILED");
+          clearInterval(intervalId);
+          addLogEntry("Scan failed!", "error");
+        }
+        
+        // Add new log entries
+        if (res.recent_events && res.recent_events.length > 0) {
+          res.recent_events.forEach(function(event) {
+            if (!window.lastLogEntry || event.timestamp > window.lastLogEntry) {
+              addLogEntry(event.message || event, "info");
+              window.lastLogEntry = event.timestamp;
+            }
+          });
+        }
+      })
+      .fail(function () {
+        // Scan may not have status endpoint, silently continue
+      });
+  }
+
+  function addLogEntry(message, type) {
+    type = type || "info";
+    var timestamp = new Date().toLocaleTimeString();
+    var logClass = "log-" + type;
+    var logEntry = '<div class="log-entry ' + logClass + '">[' + timestamp + '] ' + message + '</div>';
+    
+    var logDiv = $("#live_log");
+    logDiv.append(logEntry);
+    logDiv.scrollTop(logDiv[0].scrollHeight);
+  }
+
+  // Stop scan button
+  $("#stop_scan_btn").click(function () {
+    if (window.currentScanInterval) {
+      clearInterval(window.currentScanInterval);
+      var scanId = $("#scan_id_display").text();
+      $.ajax({
+        type: "POST",
+        url: "/scan/stop?scan_id=" + scanId,
+        dataType: "json",
+      })
+        .done(function () {
+          addLogEntry("Scan stopped by user.", "warning");
+          $("#scan_status").text("STOPPED").removeClass("label-info").addClass("label-warning");
+        });
+    }
+  });
+
+  // Hide progress button
+  $("#hide_progress_btn").click(function () {
+    if (window.currentScanInterval) {
+      clearInterval(window.currentScanInterval);
+    }
+    $("#scan_progress").addClass("hidden");
+    $("#home").removeClass("hidden");
+  });
+
+  // Show progress on page load with poll
+  window.lastLogEntry = null;
+  window.currentScanInterval = null;
 });
+
