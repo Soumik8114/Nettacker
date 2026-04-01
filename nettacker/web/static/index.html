@@ -164,6 +164,11 @@
                                 <i class="fa fa-question-circle"></i> Tutorial
                             </button>
                         </li>
+                        <li id="current_scans_btn_ul">
+                            <button id="current_scans_btn" class="btn btn-default navbar-btn" style="margin-right: 5px;" title="View currently running scans">
+                                <i class="fa fa-spinner fa-spin"></i> Current Scans
+                            </button>
+                        </li>
                         <li id="crawler_btn_ul">
                             <button id="crawler_btn" class="btn btn-primary navbar-btn" style="margin-right: 5px;" title="Browse results by host">
                                 <i class="fa fa-globe"></i> Crawler
@@ -658,8 +663,24 @@
         <br><br>
     </div>
 
+    <!-- CURRENT SCANS LIST -->
+    <div id="current_scans_list_area" class="hidden">
+        <h2><i class="fa fa-spinner fa-spin"></i> Currently Running Scans</h2>
+        <p class="text-muted">Select a scan to view its progress.</p>
+        <hr>
+        <div id="current_scans_list" class="list-group">
+            <p>No scans are currently running.</p>
+        </div>
+        <button type="button" id="refresh_current_scans_btn" class="btn btn-primary" style="margin-bottom: 20px;">
+            <i class="fa fa-refresh"></i> Refresh
+        </button>
+    </div>
+
     <!-- LIVE SCAN PROGRESS MONITORING -->
     <div id="scan_progress" class="hidden">
+        <button type="button" id="back_to_current_scans_btn" class="btn btn-default" style="margin-bottom: 20px;">
+            <i class="fa fa-arrow-left"></i> Back to Current Scans
+        </button>
         <h2><i class="fa fa-spinner fa-spin"></i> Live Scan Progress</h2>
         <p class="text-muted">Real-time monitoring of your security scan</p>
         <hr>

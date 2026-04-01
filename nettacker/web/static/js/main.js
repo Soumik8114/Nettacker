@@ -88,12 +88,21 @@ $(document).ready(function () {
       });
   });
 
-  // home
-  $("#home_btn").click(function () {
+  // hide all views
+  function hide_all_views() {
+    $("#home").addClass("hidden");
     $("#new_scan").addClass("hidden");
     $("#get_results").addClass("hidden");
     $("#crawler_area").addClass("hidden");
     $("#compare_area").addClass("hidden");
+    $("#current_scans_list_area").addClass("hidden");
+    $("#scan_progress").addClass("hidden");
+    $("#login_first").addClass("hidden");
+  }
+
+  // home
+  $("#home_btn").click(function () {
+    hide_all_views();
     $("#home").removeClass("hidden");
   });
 
@@ -105,51 +114,28 @@ $(document).ready(function () {
       dataType: "text",
     })
       .done(function (res) {
-        $("#home").addClass("hidden");
-        $("#get_results").addClass("hidden");
-        $("#crawler_area").addClass("hidden");
-        $("#login_first").addClass("hidden");
-        $("#compare_area").addClass("hidden");
+        hide_all_views();
         $("#new_scan").removeClass("hidden");
       })
       .fail(function (jqXHR, textStatus, errorThrown) {
-        $("#home").addClass("hidden");
-        $("#get_results").addClass("hidden");
-        $("#crawler_area").addClass("hidden");
-        $("#new_scan").addClass("hidden");
-        $("#compare_area").addClass("hidden");
+        hide_all_views();
         $("#login_first").removeClass("hidden");
       });
   });
 
   // results crawler
   $("#results_btn").click(function () {
-    $("#home").addClass("hidden");
-    $("#new_scan").addClass("hidden");
-    $("#crawler_area").addClass("hidden");
-    $("#compare_area").addClass("hidden");
+    hide_all_views();
     $("#get_results").removeClass("hidden");
   });
 
   // hosts crawler
   $("#crawler_btn").click(function () {
-    $("#home").addClass("hidden");
-    $("#new_scan").addClass("hidden");
-    $("#get_results").addClass("hidden");
-    $("#compare_area").addClass("hidden");
+    hide_all_views();
     $("#crawler_area").removeClass("hidden");
   });
 
   // Compare scans
-  $("#compare_btn").click(function() {
-    $("#home").addClass("hidden");
-    $("#new_scan").addClass("hidden");
-    $("#get_results").addClass("hidden");
-    $("#crawler_area").addClass("hidden");
-    $("#compare_area").removeClass("hidden");
-  });
-
-  // Show the scan compare area
   $("#compare_btn").click(function() {
     $.ajax({
       type: "GET",
@@ -157,22 +143,103 @@ $(document).ready(function () {
       dataType: "text",
     })
       .done(function (res) {
-        $("#home").addClass("hidden");
-        $("#new_scan").addClass("hidden");
-        $("#get_results").addClass("hidden");
-        $("#crawler_area").addClass("hidden");
-        $("#login_first").addClass("hidden");
+        hide_all_views();
         $("#compare_area").removeClass("hidden");
       })
       .fail(function (jqXHR, textStatus, errorThrown) {
-        $("#home").addClass("hidden");
-        $("#get_results").addClass("hidden");
-        $("#crawler_area").addClass("hidden");
-        $("#new_scan").addClass("hidden");
-        $("#compare_area").addClass("hidden");
+        hide_all_views();
         $("#login_first").removeClass("hidden");
       });
   });
+
+  // Current Scans View
+  $("#current_scans_btn, #back_to_current_scans_btn").click(function () {
+    $.ajax({
+      type: "GET",
+      url: "/session/check",
+      dataType: "text",
+    })
+      .done(function (res) {
+        hide_all_views();
+        $("#current_scans_list_area").removeClass("hidden");
+        load_current_scans();
+      })
+      .fail(function (jqXHR, textStatus, errorThrown) {
+        hide_all_views();
+        $("#login_first").removeClass("hidden");
+      });
+  });
+
+  $("#refresh_current_scans_btn").click(function () {
+    load_current_scans();
+  });
+
+  function load_current_scans() {
+    $.ajax({
+      type: "GET",
+      url: "/scan/list",
+      dataType: "json",
+    })
+      .done(function (res) {
+        var HTMLData = "";
+        var hasScans = false;
+        if (res && res.scans) {
+          for (var scan_id in res.scans) {
+             hasScans = true;
+             var scan = res.scans[scan_id];
+             var target_text = scan.total_targets + " targets";
+             var status_class = scan.status === 'completed' ? 'label-success' :
+                               (scan.status === 'failed' ? 'label-danger' :
+                               (scan.status === 'stopped' ? 'label-warning' : 'label-info'));
+
+             HTMLData += '<a href="javascript:void(0);" onclick="view_scan_progress(\\'' + scan_id + '\\')" class="list-group-item list-group-item-action flex-column align-items-start">' +
+               '<div class="d-flex w-100 justify-content-between">' +
+               '<h5 class="mb-1"><strong>Scan ID:</strong> ' + scan_id + '</h5>' +
+               '</div>' +
+               '<p class="mb-1"><strong>Targets:</strong> ' + target_text + ' | <strong>Modules:</strong> ' + scan.total_modules + '</p>' +
+               '<small><span class="label ' + status_class + '">' + scan.status.toUpperCase() + '</span></small>' +
+               '</a>';
+          }
+        }
+        if (!hasScans) {
+           HTMLData = "<p>No scans are currently running.</p>";
+        }
+        $("#current_scans_list").html(HTMLData);
+      })
+      .fail(function (jqXHR, textStatus, errorThrown) {
+         $("#current_scans_list").html("<p class='text-danger'>Failed to load currently running scans.</p>");
+      });
+  }
+
+  // Make view_scan_progress available globally
+  window.view_scan_progress = function(scan_id) {
+    hide_all_views();
+    $("#scan_progress").removeClass("hidden");
+
+    // Reset UI before loading
+    $("#scan_id_display").text(scan_id);
+    $("#start_time").text("Loading...");
+    $("#targets_count").text(0);
+    $("#progress_percentage").text(0);
+    $("#progress_bar").css("width", "0%").attr("aria-valuenow", 0).text("0%");
+    $("#current_target").text("Loading...");
+    $("#current_module").text("Loading...");
+    $("#elapsed_time").text("00:00:00");
+    $("#remaining_time").text("Loading...");
+    $("#issues_found").text("0");
+    $("#hosts_scanned").text("0");
+    $("#modules_run").text("0");
+    $("#open_ports").text("0");
+    $("#services_found").text("0");
+    $("#scan_status").removeClass("label-success label-danger label-warning label-info").addClass("label-info").text("LOADING");
+    $("#stop_scan_btn").prop("disabled", false);
+    $("#live_log").html('<span class="text-muted">[Loading scan events...]</span>');
+    window.seenEventKeys = {};
+
+    // Start monitoring
+    var startTime = new Date(); // Note: We might want actual start time from backend if available
+    startLiveScanMonitoring(scan_id, startTime);
+  };
 
   // Create the compare report
   $("#create_compare_report").click(function() {
@@ -471,7 +538,7 @@ $(document).ready(function () {
           window.seenEventKeys = {};
 
           // Switch view
-          $("#home").addClass("hidden");
+          hide_all_views();
           $("#scan_progress").removeClass("hidden");
 
           // Start polling
@@ -1394,8 +1461,7 @@ function filter_large_content(content, filter_rate){
     if (window.currentScanInterval) {
       clearInterval(window.currentScanInterval);
     }
-    $("#scan_progress").addClass("hidden");
-    $("#home").removeClass("hidden");
+    $("#current_scans_btn").click();
   });
 
   // Show progress on page load with poll
