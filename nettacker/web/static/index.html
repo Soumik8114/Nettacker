@@ -103,18 +103,23 @@
         .row { margin-bottom: 10px; }
     </style>
     <script>
-        length = document.getElementById("json_length").innerText;
-        document.getElementById("json_length").innerText = "";
-        renderjson.set_icons('▶','▼')
-        renderjson.set_collapse_msg(function (asd) {return "...";});
-        arr = [];
-        for (let i=1; i<=length; i++) {
-            value = document.getElementById("json_event_"+i).innerText;
-            arr.push(value);
-            document.getElementById("json_event_"+i).innerText = "";
-            document.getElementById("json_clipboard_"+i).addEventListener("click", function() { navigator.clipboard.writeText(arr[i-1]); });
-            document.getElementById("json_event_"+i).appendChild(renderjson(JSON.parse(value)));
-        }
+        document.addEventListener("DOMContentLoaded", function() {
+            var json_length_elem = document.getElementById("json_length");
+            if (json_length_elem) {
+                var length = json_length_elem.innerText;
+                json_length_elem.innerText = "";
+                renderjson.set_icons('▶','▼')
+                renderjson.set_collapse_msg(function (asd) {return "...";});
+                var arr = [];
+                for (let i=1; i<=length; i++) {
+                    var value = document.getElementById("json_event_"+i).innerText;
+                    arr.push(value);
+                    document.getElementById("json_event_"+i).innerText = "";
+                    document.getElementById("json_clipboard_"+i).addEventListener("click", function() { navigator.clipboard.writeText(arr[i-1]); });
+                    document.getElementById("json_event_"+i).appendChild(renderjson(JSON.parse(value)));
+                }
+            }
+        });
     </script>
 </head>
 <div class="container">
@@ -162,6 +167,11 @@
                         <li id="tutorial_btn">
                             <button id="tutorial_btn" class="btn btn-info navbar-btn" style="margin-right: 5px;">
                                 <i class="fa fa-question-circle"></i> Tutorial
+                            </button>
+                        </li>
+                        <li id="current_scans_btn_ul">
+                            <button id="current_scans_btn" class="btn btn-default navbar-btn" style="margin-right: 5px;" title="View currently running scans">
+                                <i class="fa fa-spinner fa-spin"></i> Current Scans
                             </button>
                         </li>
                         <li id="crawler_btn_ul">
@@ -658,8 +668,24 @@
         <br><br>
     </div>
 
+    <!-- CURRENT SCANS LIST -->
+    <div id="current_scans_list_area" class="hidden">
+        <h2><i class="fa fa-spinner fa-spin"></i> Currently Running Scans</h2>
+        <p class="text-muted">Select a scan to view its progress.</p>
+        <hr>
+        <div id="current_scans_list" class="list-group">
+            <p>No scans are currently running.</p>
+        </div>
+        <button type="button" id="refresh_current_scans_btn" class="btn btn-primary" style="margin-bottom: 20px;">
+            <i class="fa fa-refresh"></i> Refresh
+        </button>
+    </div>
+
     <!-- LIVE SCAN PROGRESS MONITORING -->
     <div id="scan_progress" class="hidden">
+        <button type="button" id="back_to_current_scans_btn" class="btn btn-default" style="margin-bottom: 20px;">
+            <i class="fa fa-arrow-left"></i> Back to Current Scans
+        </button>
         <h2><i class="fa fa-spinner fa-spin"></i> Live Scan Progress</h2>
         <p class="text-muted">Real-time monitoring of your security scan</p>
         <hr>

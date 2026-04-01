@@ -487,6 +487,22 @@ if sock:
                 break
 
 
+
+@app.route("/scan/list", methods=["GET"])
+def get_running_scans_list():
+    """
+    Get the list of currently running scans
+
+    Returns:
+        JSON with a list of running scan IDs and their status
+    """
+    api_key_is_valid(app, flask_request)
+    from nettacker.api.scan_state import running_scans
+
+    # Return a copy of the running scans dictionary
+    return jsonify({"scans": running_scans}), 200
+
+
 @app.route("/scan/status", methods=["GET"])
 def get_scan_status():
     """
