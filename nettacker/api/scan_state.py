@@ -82,6 +82,16 @@ def register_scan(scan_id, total_targets, total_modules):
     notify_scan_changed(scan_id)
 
 
+def update_scan_info(scan_id, total_targets=None, total_modules=None):
+    """Update the total targets and modules for a running scan"""
+    if scan_id in running_scans:
+        if total_targets is not None:
+            running_scans[scan_id]["total_targets"] = _to_count(total_targets)
+        if total_modules is not None:
+            running_scans[scan_id]["total_modules"] = _to_count(total_modules)
+        notify_scan_changed(scan_id)
+
+
 def update_scan_progress(scan_id, current_target="", current_module=""):
     """Update the current target and module for a running scan"""
     if scan_id in running_scans:
