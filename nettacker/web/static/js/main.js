@@ -1458,7 +1458,17 @@ function filter_large_content(content, filter_rate){
   $("#stop_scan_btn").click(function () {
     if (window.currentScanInterval) {
       clearInterval(window.currentScanInterval);
-      var scanId = $("#scan_id_display").text();
+      window.currentScanInterval = null;
+    }
+    if (window.currentScanWebSocket) {
+      try {
+        window.currentScanWebSocket.close();
+      } catch (e) {}
+      window.currentScanWebSocket = null;
+    }
+
+    var scanId = $("#scan_id_display").text();
+    if (scanId && scanId !== "-") {
       $.ajax({
         type: "POST",
         url: "/scan/stop?scan_id=" + scanId,
@@ -1467,6 +1477,10 @@ function filter_large_content(content, filter_rate){
         .done(function () {
           addLogEntry("Scan stopped by user.", "warning");
           $("#scan_status").text("STOPPED").removeClass("label-info").addClass("label-warning");
+          $("#stop_scan_btn").prop("disabled", true);
+        })
+        .fail(function() {
+          addLogEntry("Failed to stop scan.", "error");
         });
     }
   });
