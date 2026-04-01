@@ -103,18 +103,23 @@
         .row { margin-bottom: 10px; }
     </style>
     <script>
-        length = document.getElementById("json_length").innerText;
-        document.getElementById("json_length").innerText = "";
-        renderjson.set_icons('▶','▼')
-        renderjson.set_collapse_msg(function (asd) {return "...";});
-        arr = [];
-        for (let i=1; i<=length; i++) {
-            value = document.getElementById("json_event_"+i).innerText;
-            arr.push(value);
-            document.getElementById("json_event_"+i).innerText = "";
-            document.getElementById("json_clipboard_"+i).addEventListener("click", function() { navigator.clipboard.writeText(arr[i-1]); });
-            document.getElementById("json_event_"+i).appendChild(renderjson(JSON.parse(value)));
-        }
+        document.addEventListener("DOMContentLoaded", function() {
+            var json_length_elem = document.getElementById("json_length");
+            if (json_length_elem) {
+                var length = json_length_elem.innerText;
+                json_length_elem.innerText = "";
+                renderjson.set_icons('▶','▼')
+                renderjson.set_collapse_msg(function (asd) {return "...";});
+                var arr = [];
+                for (let i=1; i<=length; i++) {
+                    var value = document.getElementById("json_event_"+i).innerText;
+                    arr.push(value);
+                    document.getElementById("json_event_"+i).innerText = "";
+                    document.getElementById("json_clipboard_"+i).addEventListener("click", function() { navigator.clipboard.writeText(arr[i-1]); });
+                    document.getElementById("json_event_"+i).appendChild(renderjson(JSON.parse(value)));
+                }
+            }
+        });
     </script>
 </head>
 <div class="container">

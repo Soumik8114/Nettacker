@@ -192,7 +192,7 @@ $(document).ready(function () {
                                (scan.status === 'failed' ? 'label-danger' :
                                (scan.status === 'stopped' ? 'label-warning' : 'label-info'));
 
-             HTMLData += '<a href="javascript:void(0);" onclick="view_scan_progress(\\'' + scan_id + '\\')" class="list-group-item list-group-item-action flex-column align-items-start">' +
+             HTMLData += '<a href="javascript:void(0);" onclick="view_scan_progress(\'' + scan_id + '\')" class="list-group-item list-group-item-action flex-column align-items-start">' +
                '<div class="d-flex w-100 justify-content-between">' +
                '<h5 class="mb-1"><strong>Scan ID:</strong> ' + scan_id + '</h5>' +
                '</div>' +
