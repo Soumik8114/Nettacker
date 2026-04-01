@@ -1218,9 +1218,19 @@ function filter_large_content(content, filter_rate){
     // Update current scanning info
     if (res.current_target) {
       $("#current_target").text(res.current_target);
+    } else {
+      $("#current_target").text("Waiting...");
     }
+
     if (res.current_module) {
       $("#current_module").text(res.current_module);
+    } else {
+      $("#current_module").text("Waiting...");
+    }
+
+    // Update targets count
+    if (res.total_targets !== undefined) {
+        $("#targets_count").text(res.total_targets);
     }
 
     // Update statistics
@@ -1262,7 +1272,12 @@ function filter_large_content(content, filter_rate){
     }
 
     // Update scan status
-    if (res.status === "completed") {
+    if (res.status === "running") {
+      $("#scan_status")
+        .removeClass("label-success label-danger label-warning label-info")
+        .addClass("label-info")
+        .text("RUNNING");
+    } else if (res.status === "completed") {
       // If the backend reports completion but the computed percent is low,
       // force the UI to 100% to avoid a "stuck" progress bar.
       if (progress < 100) {
