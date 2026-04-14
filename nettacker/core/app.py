@@ -36,6 +36,7 @@ from nettacker.logger import TerminalCodes
 from nettacker.api.scan_state import (
     register_scan,
     set_scan_status,
+    update_scan_info,
     update_scan_progress,
     is_stop_requested,
 )
@@ -215,18 +216,25 @@ class Nettacker(ArgParser):
             self.scan_id = common_utils.generate_random_token(32)
         scan_id = self.scan_id
         log.info("ScanID: {0}".format(scan_id))
+
+        # Register scan early in the state tracker for API progress monitoring
+        total_targets = len(self.arguments.targets) if hasattr(self.arguments, "targets") else 0
+        total_modules = len(self.arguments.selected_modules) if hasattr(self.arguments, "selected_modules") else 0
+        register_scan(scan_id, total_targets, total_modules)
+
         log.info(_("regrouping_targets"))
         # find total number of targets + types + expand (subdomain, IPRanges, etc)
         # optimize CPU usage
         self.arguments.targets = self.expand_targets(scan_id)
+
         if not self.arguments.targets:
             log.info(_("no_live_service_found"))
+            set_scan_status(scan_id, "failed")
             return True
         
-        # Register scan in the state tracker for API progress monitoring
+        # Update scan info after target expansion
         total_targets = len(self.arguments.targets)
-        total_modules = len(self.arguments.selected_modules)
-        register_scan(scan_id, total_targets, total_modules)
+        update_scan_info(scan_id, total_targets=total_targets)
         
         exit_code = self.start_scan(scan_id)
         create_report(self.arguments, scan_id)
